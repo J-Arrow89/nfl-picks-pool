@@ -44,7 +44,12 @@ export default async function HomePage() {
     : { data: [] as Pick[] };
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-emerald-950">
+    <main
+      className="relative min-h-screen bg-cover bg-center bg-fixed"
+      style={{ backgroundImage: "url('/main-bg.jpg')" }}
+    >
+      <div className="fixed inset-0 bg-black/55 pointer-events-none" />
+      <div className="relative z-10">
       <NavBar name={profile?.display_name ?? user.email ?? ""} />
       <div className="max-w-5xl mx-auto px-4 py-6">
         <h1 className="text-white text-xl font-bold mb-1">Week {week} Picks</h1>
@@ -76,6 +81,7 @@ export default async function HomePage() {
             ))}
           </div>
         )}
+      </div>
       </div>
     </main>
   );
