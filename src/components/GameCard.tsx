@@ -59,7 +59,15 @@ export default function GameCard({
     <div className="rounded-2xl border border-slate-700/60 bg-slate-900/60 p-4 shadow-lg">
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs text-slate-400">{kickoffLabel}</span>
-        {locked ? (
+        {game.status === "final" ? (
+          <span className="text-[11px] uppercase tracking-wide font-semibold text-slate-300">
+            Final
+          </span>
+        ) : game.status === "live" ? (
+          <span className="text-[11px] uppercase tracking-wide font-semibold text-red-400 flex items-center gap-1">
+            <span className="h-1.5 w-1.5 rounded-full bg-red-400 animate-pulse" /> Live
+          </span>
+        ) : locked ? (
           <span className="text-[11px] uppercase tracking-wide font-semibold text-amber-400 flex items-center gap-1">
             🔒 Locked
           </span>

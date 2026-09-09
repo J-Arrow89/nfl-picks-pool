@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import type { SyntheticEvent } from "react";
 
 const STORAGE_KEY = "who-ya-got-music-muted";
 
@@ -9,52 +10,65 @@ const STORAGE_KEY = "who-ya-got-music-muted";
  * client-side navigation between /login, /, and /standings. Browsers block
  * autoplay with sound, so it starts muted and the button doubles as both
  * the "turn music on" control and a mute toggle after that.
+ *
+ * No autoplay attribute and no eager preload here on purpose: on mobile
+ * (especially with low-data mode on cellular), browsers will abort an
+ * eagerly-preloading/autoplaying <audio> element and fire a real `error`
+ * event even though the file is perfectly fine — that's what was causing
+ * the permanent caution icon on phones while it worked fine on desktop.
+ * Instead, loading only starts once the button is actually pressed.
  */
 function readStoredMuted(): boolean {
   if (typeof window === "undefined") return true;
   try {
     return window.localStorage.getItem(STORAGE_KEY) !== "false";
   } catch {
-    // localStorage unavailable (private browsing, etc.) — default to muted.
     return true;
   }
 }
 
 export default function MusicPlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  // Lazy initializer only — reads localStorage once on mount, not inside an
-  // effect, so there's no synchronous setState-in-effect cascade.
   const [muted, setMuted] = useState(readStoredMuted);
   const [loadError, setLoadError] = useState(false);
 
-  // Keep the element's muted flag in sync (covers the initial mount and any
-  // state changes that don't go through the click handler below).
-  useEffect(() => {
-    if (!audioRef.current) return;
-    audioRef.current.muted = muted;
-    audioRef.current.play().catch(() => {});
-  }, [muted]);
+  const handleError = (e: SyntheticEvent<HTMLAudioElement>) => {
+    const code = e.currentTarget.error?.code;
+    // Code 1 = MEDIA_ERR_ABORTED — the browser cancelled the load itself
+    // (data saver, backgrounding, etc.), not a real failure. Only treat
+    // network/decode/unsupported errors (2, 3, 4) as a genuine problem.
+    if (code && code !== MediaError.MEDIA_ERR_ABORTED) {
+      setLoadError(true);
+    }
+  };
 
-  // The important part for browser autoplay policy (especially Safari/iOS):
-  // play() must be called synchronously inside the click handler itself.
-  // Calling it from a useEffect that fires *after* the click can lose the
-  // "this came from a real user gesture" credential the browser requires
-  // for unmuted audio, so we do both here as well as in the effect above.
+  // play() is called directly inside the click handler (not an effect) so
+  // it's still tied to the user gesture — required for unmuted playback on
+  // Safari/iOS in particular.
   const toggle = () => {
-    setMuted((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(STORAGE_KEY, String(next));
-      } catch {
-        // ignore
+    const audio = audioRef.current;
+    const next = !muted;
+
+    try {
+      window.localStorage.setItem(STORAGE_KEY, String(next));
+    } catch {
+      // ignore
+    }
+
+    if (audio) {
+      if (loadError) {
+        // Give it a fresh shot rather than staying stuck on a stale error.
+        setLoadError(false);
+        audio.load();
       }
-      const audio = audioRef.current;
-      if (audio) {
-        audio.muted = next;
-        audio.play().catch(() => {});
-      }
-      return next;
-    });
+      audio.muted = next;
+      audio.play().catch(() => {
+        // Actual playback failure (not caught by the error event) — surface it.
+        setLoadError(true);
+      });
+    }
+
+    setMuted(next);
   };
 
   return (
@@ -63,10 +77,9 @@ export default function MusicPlayer() {
         ref={audioRef}
         src="/audio/football.mp3"
         loop
-        autoPlay
         playsInline
-        preload="auto"
-        onError={() => setLoadError(true)}
+        preload="none"
+        onError={handleError}
       />
       <button
         type="button"
@@ -74,7 +87,7 @@ export default function MusicPlayer() {
         aria-label={muted ? "Turn music on" : "Mute music"}
         title={
           loadError
-            ? "Music file failed to load"
+            ? "Couldn't load music — tap to retry"
             : muted
               ? "Turn music on"
               : "Mute music"
