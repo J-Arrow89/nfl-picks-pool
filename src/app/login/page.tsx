@@ -61,8 +61,12 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gradient-to-b from-slate-950 via-slate-900 to-emerald-950 px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-slate-900/80 border border-slate-700 shadow-2xl p-8 backdrop-blur">
+    <main
+      className="relative min-h-screen flex items-center justify-center px-4 bg-cover bg-center"
+      style={{ backgroundImage: "url('/login-bg.jpg')" }}
+    >
+      <div className="absolute inset-0 bg-black/50" />
+      <div className="relative z-10 w-full max-w-sm rounded-2xl bg-slate-900/80 border border-slate-700 shadow-2xl p-8 backdrop-blur">
         <h1 className="text-2xl font-bold text-white text-center tracking-tight">
           🏈 Who Ya Got?
         </h1>
