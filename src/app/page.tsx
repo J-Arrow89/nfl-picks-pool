@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import NavBar from "@/components/NavBar";
 import GameCard from "@/components/GameCard";
+import PicksDueBanner from "@/components/PicksDueBanner";
+import WeeklyRecapCard from "@/components/WeeklyRecapCard";
 import type { Game, Pick, Profile } from "@/lib/types";
 
 export default async function HomePage() {
@@ -43,6 +45,32 @@ export default async function HomePage() {
     ? await supabase.from("picks").select("*").in("game_id", gameIds)
     : { data: [] as Pick[] };
 
+  // Weekly recap: the week right before whatever's currently showing above,
+  // but only once every one of its games is final. Right after a week wraps
+  // up, sync-scores.mts rolls the schedule forward in the same run, so the
+  // "current" week here is usually already next week's upcoming games —
+  // this is what surfaces last week's results instead of them just vanishing.
+  const previousWeek = week - 1;
+  let recapGames: Game[] = [];
+  let recapPicks: Pick[] = [];
+  if (previousWeek >= 1) {
+    const { data: prevGames } = await supabase
+      .from("games")
+      .select("*")
+      .eq("week", previousWeek)
+      .order("kickoff_time", { ascending: true });
+
+    if (prevGames && prevGames.length > 0 && prevGames.every((g) => g.status === "final")) {
+      recapGames = prevGames as Game[];
+      const prevGameIds = recapGames.map((g) => g.id);
+      const { data: prevPicks } = await supabase
+        .from("picks")
+        .select("*")
+        .in("game_id", prevGameIds);
+      recapPicks = (prevPicks as Pick[]) ?? [];
+    }
+  }
+
   return (
     <main
       className="relative min-h-screen bg-cover bg-center bg-fixed"
@@ -52,10 +80,24 @@ export default async function HomePage() {
       <div className="relative z-10">
       <NavBar name={profile?.display_name ?? user.email ?? ""} />
       <div className="max-w-5xl mx-auto px-4 py-6">
+        {recapGames.length > 0 && (
+          <WeeklyRecapCard
+            week={previousWeek}
+            games={recapGames}
+            picks={recapPicks}
+            profiles={(profiles as Profile[]) ?? []}
+          />
+        )}
+
         <h1 className="text-white text-xl font-bold mb-1">Week {week} Picks</h1>
-        <p className="text-slate-400 text-sm mb-6">
+        <p className="text-slate-400 text-sm mb-4">
           Winner + Over/Under, per game. Locks the moment kickoff hits.
         </p>
+
+        <PicksDueBanner
+          games={(games as Game[]) ?? []}
+          myPicks={(picks as Pick[]).filter((p) => p.player_id === user.id)}
+        />
 
         {!games || games.length === 0 ? (
           <p className="text-slate-400 text-sm">
