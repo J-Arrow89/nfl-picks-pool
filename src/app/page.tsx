@@ -3,6 +3,7 @@ import NavBar from "@/components/NavBar";
 import GameCard from "@/components/GameCard";
 import PicksDueBanner from "@/components/PicksDueBanner";
 import WeeklyRecapCard from "@/components/WeeklyRecapCard";
+import RotatingBackground from "@/components/RotatingBackground";
 import type { Game, Pick, Profile } from "@/lib/types";
 
 export default async function HomePage() {
@@ -72,10 +73,8 @@ export default async function HomePage() {
   }
 
   return (
-    <main
-      className="relative min-h-screen bg-cover bg-center bg-fixed"
-      style={{ backgroundImage: "url('/main-bg.jpg')" }}
-    >
+    <main className="relative min-h-screen">
+      <RotatingBackground />
       <div className="fixed inset-0 bg-black/55 pointer-events-none" />
       <div className="relative z-10">
       <NavBar name={profile?.display_name ?? user.email ?? ""} />
