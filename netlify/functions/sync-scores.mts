@@ -26,7 +26,7 @@ import { createClient } from "@supabase/supabase-js";
 type EspnCompetitor = {
   homeAway: "home" | "away";
   score?: string;
-  team?: { displayName?: string };
+  team?: { id?: string; displayName?: string };
 };
 
 type EspnOdds = {
@@ -39,10 +39,172 @@ type EspnCompetition = {
 };
 
 type EspnEvent = {
+  id?: string; // ESPN's event id — needed to fetch the full boxscore below
   date?: string; // ISO kickoff time
   status?: { type?: { name?: string } };
   competitions?: EspnCompetition[];
 };
+
+// ---- Full boxscore (summary endpoint) — only fetched once, the run a
+// game transitions to final, since that's the only time its box score
+// changes and it costs one extra ESPN call per finished game. ----
+
+type GameLeader = { name: string; team: string; value: number; line: string };
+type GameLeaders = {
+  passing: GameLeader[];
+  rushing: GameLeader[];
+  receiving: GameLeader[];
+};
+
+type EspnBoxAthleteEntry = {
+  athlete?: { displayName?: string };
+  stats?: string[];
+};
+
+type EspnBoxStatCategory = {
+  name?: string; // "passing" | "rushing" | "receiving" | ...
+  labels?: string[];
+  athletes?: EspnBoxAthleteEntry[];
+};
+
+type EspnBoxTeam = {
+  team?: { displayName?: string };
+  statistics?: EspnBoxStatCategory[];
+};
+
+type EspnSummary = {
+  boxscore?: { players?: EspnBoxTeam[] };
+};
+
+async function fetchEspnSummary(eventId: string): Promise<EspnSummary | null> {
+  const url = `https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${eventId}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    console.error(`sync-scores: ESPN summary fetch failed for event ${eventId}: ${res.status}`);
+    return null;
+  }
+  return (await res.json()) as EspnSummary;
+}
+
+// Pulls a numbered stat out of a box-score row by its column label
+// (rather than a hardcoded index — ESPN's column order isn't guaranteed
+// stable), e.g. statByLabel(labels, stats, "YDS").
+function statByLabel(labels: string[], stats: string[], label: string): string | null {
+  const idx = labels.indexOf(label);
+  return idx === -1 ? null : (stats[idx] ?? null);
+}
+
+function toNumber(s: string | null): number | null {
+  if (s === null) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Builds every category's full-box-score leader list for one game, both
+// teams combined. `passing` keeps every QB who threw a pass (not just
+// one) because ranking by QBR/RTG requires comparing every candidate —
+// the best-QBR passer in a game isn't always its top-yardage passer, so
+// nobody can be left out here without risking a wrong week-wide winner.
+// `rushing`/`receiving` only need each team's single leader, since yards
+// is a fine metric and the week's max is always someone's game-high.
+function extractBoxscoreLeaders(summary: EspnSummary | null): GameLeaders | null {
+  const teams = summary?.boxscore?.players;
+  if (!teams || teams.length === 0) return null;
+
+  const passing: GameLeader[] = [];
+  const rushing: GameLeader[] = [];
+  const receiving: GameLeader[] = [];
+
+  for (const team of teams) {
+    const teamName = team.team?.displayName ?? "";
+
+    const passingCat = team.statistics?.find((s) => s.name === "passing");
+    for (const a of passingCat?.athletes ?? []) {
+      const name = a.athlete?.displayName;
+      const labels = passingCat?.labels ?? [];
+      const stats = a.stats ?? [];
+      if (!name || stats.length === 0) continue;
+
+      const compAtt = statByLabel(labels, stats, "C/ATT");
+      const yds = statByLabel(labels, stats, "YDS");
+      const td = statByLabel(labels, stats, "TD");
+      const int = statByLabel(labels, stats, "INT");
+      const qbr = toNumber(statByLabel(labels, stats, "QBR"));
+      const rtg = toNumber(statByLabel(labels, stats, "RTG"));
+      // QBR is the better quality signal (accounts for game situation,
+      // not just volume); RTG is the fallback for the rare game where
+      // ESPN hasn't calculated QBR (e.g. very few attempts).
+      const value = qbr ?? rtg;
+      if (value === null) continue;
+
+      const parts = [
+        compAtt,
+        yds !== null ? `${yds} YDS` : null,
+        td !== null ? `${td} TD` : null,
+        int !== null ? `${int} INT` : null,
+        qbr !== null ? `QBR ${qbr}` : null,
+        rtg !== null ? `RTG ${rtg}` : null,
+      ].filter((p): p is string => p !== null);
+
+      passing.push({ name, team: teamName, value, line: parts.join(", ") });
+    }
+
+    const rushingCat = team.statistics?.find((s) => s.name === "rushing");
+    const rushLabels = rushingCat?.labels ?? [];
+    let topRusher: GameLeader | null = null;
+    for (const a of rushingCat?.athletes ?? []) {
+      const name = a.athlete?.displayName;
+      const stats = a.stats ?? [];
+      const yds = toNumber(statByLabel(rushLabels, stats, "YDS"));
+      if (!name || yds === null) continue;
+      if (!topRusher || yds > topRusher.value) {
+        const car = statByLabel(rushLabels, stats, "CAR");
+        const avg = statByLabel(rushLabels, stats, "AVG");
+        const td = statByLabel(rushLabels, stats, "TD");
+        const long = statByLabel(rushLabels, stats, "LONG");
+        const parts = [
+          car !== null ? `${car} CAR` : null,
+          `${yds} YDS`,
+          avg !== null ? `${avg} AVG` : null,
+          td !== null ? `${td} TD` : null,
+          long !== null ? `LONG ${long}` : null,
+        ].filter((p): p is string => p !== null);
+        topRusher = { name, team: teamName, value: yds, line: parts.join(", ") };
+      }
+    }
+    if (topRusher) rushing.push(topRusher);
+
+    const receivingCat = team.statistics?.find((s) => s.name === "receiving");
+    const recLabels = receivingCat?.labels ?? [];
+    let topReceiver: GameLeader | null = null;
+    for (const a of receivingCat?.athletes ?? []) {
+      const name = a.athlete?.displayName;
+      const stats = a.stats ?? [];
+      const yds = toNumber(statByLabel(recLabels, stats, "YDS"));
+      if (!name || yds === null) continue;
+      if (!topReceiver || yds > topReceiver.value) {
+        const rec = statByLabel(recLabels, stats, "REC");
+        const avg = statByLabel(recLabels, stats, "AVG");
+        const td = statByLabel(recLabels, stats, "TD");
+        const long = statByLabel(recLabels, stats, "LONG");
+        const tgts = statByLabel(recLabels, stats, "TGTS");
+        const parts = [
+          rec !== null ? `${rec} REC` : null,
+          `${yds} YDS`,
+          avg !== null ? `${avg} AVG` : null,
+          td !== null ? `${td} TD` : null,
+          long !== null ? `LONG ${long}` : null,
+          tgts !== null ? `${tgts} TGT` : null,
+        ].filter((p): p is string => p !== null);
+        topReceiver = { name, team: teamName, value: yds, line: parts.join(", ") };
+      }
+    }
+    if (topReceiver) receiving.push(topReceiver);
+  }
+
+  if (passing.length === 0 && rushing.length === 0 && receiving.length === 0) return null;
+  return { passing, rushing, receiving };
+}
 
 function mapStatus(espnStatusName: string | undefined): "upcoming" | "live" | "final" {
   if (espnStatusName === "STATUS_FINAL") return "final";
@@ -116,10 +278,24 @@ const syncScores = async () => {
         });
         if (!match) continue;
 
-        const comps = match.competitions?.[0]?.competitors ?? [];
+        const comp = match.competitions?.[0];
+        const comps = comp?.competitors ?? [];
         const homeC = comps.find((c) => c.homeAway === "home");
         const awayC = comps.find((c) => c.homeAway === "away");
         const status = mapStatus(match.status?.type?.name);
+
+        // Box score (with QBR/RTG and full stat lines) is only worth
+        // fetching the run a game actually finishes — g.status here is
+        // its status BEFORE this update, so this only fires once per game.
+        let leaders: GameLeaders | null = null;
+        if (status === "final" && g.status !== "final" && match.id) {
+          try {
+            const summary = await fetchEspnSummary(match.id);
+            leaders = extractBoxscoreLeaders(summary);
+          } catch (err) {
+            console.error(`sync-scores: boxscore fetch failed for game ${g.id}`, err);
+          }
+        }
 
         const { error: updateError } = await supabase
           .from("games")
@@ -127,6 +303,7 @@ const syncScores = async () => {
             home_score: homeC?.score !== undefined ? Number(homeC.score) : null,
             away_score: awayC?.score !== undefined ? Number(awayC.score) : null,
             status,
+            ...(leaders ? { leaders } : {}),
           })
           .eq("id", g.id);
 
