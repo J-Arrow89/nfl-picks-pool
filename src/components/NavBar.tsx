@@ -14,6 +14,9 @@ export default function NavBar({ name }: { name: string }) {
         <Link href="/standings" className="text-xs text-slate-300 hover:text-white transition">
           Standings
         </Link>
+        <Link href="/history" className="text-xs text-slate-300 hover:text-white transition">
+          History
+        </Link>
         <span className="text-xs text-slate-500">{name}</span>
         <SignOutButton />
       </nav>
